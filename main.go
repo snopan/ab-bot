@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/playwright-community/playwright-go"
 	tmpmailgo "github.com/snopan/tmpmail-go"
 )
@@ -29,17 +28,15 @@ type ResponseStatus struct {
 }
 
 func main() {
-	lambda.Start(HandleRequest)
+	if _, err := fetchRewards(); err != nil {
+		panic(err)
+	}
 }
 
-func HandleRequest() (string, error) {
-	if err := playwright.Install(); err != nil {
-		return "", fmt.Errorf("failed to install playwright deps: %w", err)
-	}
-
+func fetchRewards() (string, error) {
 	email, err := tmpmailgo.NewEmail()
 	if err != nil {
-		panic(err)
+		return "", fmt.Errorf("failed to get email: %w", err)
 	}
 
 	fmt.Println("got email: " + email.String())
