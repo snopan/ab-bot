@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -27,18 +28,48 @@ type ResponseStatus struct {
 	Msg string `json:"msg"`
 }
 
+const (
+	filename = "output"
+	headless = true
+
+	errorRegister = "failed to register"
+)
+
 func main() {
-	if _, err := fetchRewards(); err != nil {
+
+	f, err := os.OpenFile(filename, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+	if err != nil {
 		panic(err)
 	}
-}
 
-func fetchRewards() (string, error) {
-	email, err := tmpmailgo.NewEmail()
-	if err != nil {
-		return "", fmt.Errorf("failed to get email: %w", err)
+	defer f.Close()
+
+	for true {
+		email, err := tmpmailgo.NewEmail()
+		if err != nil {
+			panic(err)
+		}
+
+		rewards, err := fetchRewards(email)
+		if err != nil {
+			if strings.Contains(err.Error(), errorRegister) {
+				panic(err)
+			}
+			continue
+		}
+
+		if rewards == "" {
+			return
+		}
+
+		if _, err = f.WriteString(fmt.Sprintf("%s\n%s", email.String(), rewards)); err != nil {
+			panic(err)
+		}
 	}
 
+}
+
+func fetchRewards(email tmpmailgo.Email) (string, error) {
 	fmt.Println("got email: " + email.String())
 
 	fmt.Println("going to page...")
@@ -61,7 +92,7 @@ func fetchRewards() (string, error) {
 
 	fmt.Println("registering...")
 	if err = register(page, code); err != nil {
-		return "", fmt.Errorf("failed to register: %w", err)
+		return "", fmt.Errorf("%s: %w", errorRegister, err)
 	}
 
 	fmt.Println("getting extra draws...")
@@ -79,8 +110,12 @@ func fetchRewards() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to list rewards: %w", err)
 	}
-	fmt.Println(rewards)
 
+	if rewards == "You have not won any rewards." {
+		fmt.Println("Got no rewards")
+		return "", nil
+	}
+	fmt.Println("found rewards: " + rewards)
 	return rewards, nil
 }
 
@@ -90,7 +125,7 @@ func gotoPage(url string) (playwright.Page, error) {
 		return nil, fmt.Errorf("could not start playwright: %w", err)
 	}
 
-	headless := true
+	headless := headless
 	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
 		Headless: &headless,
 	})
@@ -134,7 +169,7 @@ func sendCode(page playwright.Page, email string) error {
 }
 
 func getVerification(email tmpmailgo.Email) (string, error) {
-	maxTries := 10
+	maxTries := 5
 	tk := time.NewTicker(5 * time.Second)
 	for range tk.C {
 
@@ -195,12 +230,11 @@ func getExtraDraws(page playwright.Page) error {
 		if err := page.Locator(fmt.Sprintf("#task_%d", i)).Click(); err != nil {
 			return fmt.Errorf("could not click task %d: %w", i, err)
 		}
-	}
+		page.WaitForTimeout(1000)
 
-	page.WaitForTimeout(1000)
-
-	if err := page.BringToFront(); err != nil {
-		return fmt.Errorf("could not bring page to front: %w", err)
+		if err := page.BringToFront(); err != nil {
+			return fmt.Errorf("could not bring page to front: %w", err)
+		}
 	}
 
 	if err := page.Locator("#task_5").Click(); err != nil {
@@ -223,23 +257,27 @@ func drawReward(page playwright.Page) error {
 		if err := page.Locator("#draw_now").Click(); err != nil {
 			return fmt.Errorf("could draw reward: %w", err)
 		}
+		page.WaitForTimeout(2000)
 
 		if err := page.Locator("#back_to_draw").Click(); err != nil {
 			return fmt.Errorf("could go back to draw: %w", err)
 		}
+		page.WaitForTimeout(1500)
 	}
 
-	if err := page.Locator(".dlg_draw_now").Locator(".dg_box_close").Click(); err != nil {
-		return fmt.Errorf("could not close draw modal: %w", err)
+	if _, err := page.Reload(); err != nil {
+		return fmt.Errorf("could not refresh: %w", err)
 	}
 
 	return nil
 }
 
 func listRewards(page playwright.Page) (string, error) {
-	if err := page.Locator(".draw_reward").Locator(".awaits_btn draw_awaits_btn").Click(); err != nil {
+
+	if err := page.Locator(".draw_reward").Locator(".draw_awaits_btn").Click(); err != nil {
 		return "", fmt.Errorf("could not reward list modal: %w", err)
 	}
+	page.WaitForTimeout(2000)
 
 	text, err := page.Locator("#showRewardList").TextContent()
 	if err != nil {
